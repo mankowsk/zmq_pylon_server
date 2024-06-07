@@ -17,11 +17,17 @@ class Camera_Attribute_Callable():
         return self._call()
 
 class ZmqPylonServer():
-    def __init__(self,):
-        try:
-            self.camera = pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateFirstDevice())
-        except Exception as e:
-            print(e)
+    def __init__(self, camera_serial_numbers=["40306615", "40154037"]):
+        self._cameras = []
+        for camera_sn in camera_serial_numbers:
+            try:
+                info = pylon.DeviceInfo()
+                info.SetSerialNumber(camera_sn)
+                camera = pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateFirstDevice(info))
+                self.__dict__[f"camera_{camera_sn}"] = camera                
+                self._cameras.append(camera)
+            except Exception as e:
+                print(e)
         self.context = None
         self.socket = None
         self.start()
@@ -102,8 +108,8 @@ class ZmqPylonServer():
             return self._get_attr(attr, *args, obj=obj, **kwargs)
 
     def stop(self):
-
-        self.camera.Close()
+        for camera in self._cameras:
+            camera.Close()
         self.socket.close()
         self.context.term()
         print("stopped")
@@ -112,7 +118,8 @@ class ZmqPylonServer():
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
         self.socket.bind("tcp://*:5555")
-        self.camera.Open()
+        for camera in self._cameras:
+            camera.Open()
         try:
             while True:
                 #  Wait for next request from client
@@ -135,7 +142,8 @@ class ZmqPylonServer():
 
 
 class ZmqPylonClient():
-    def __init__(self,):
+    def __init__(self, camera_serial_number = "40306615"):
+        self.camera_sn = camera_serial_number
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.REQ)
         self._socket.connect("tcp://slab-cons-02:5555")
@@ -143,7 +151,7 @@ class ZmqPylonClient():
 
     def _add_remote_attrs(self):
         remattrs = self._send("__dir__")
-        camremattrs = self._send("__dir__", childpath="camera")
+        camremattrs = self._send("__dir__", childpath="camera"+"_" + self.camera_sn)
         locattrs = self.__dir__()
         locattrs = locattrs + ["start", "stop", "context", "socket"]
         for a in remattrs:
@@ -158,18 +166,18 @@ class ZmqPylonClient():
             if not a in locattrs:
                 self._es = {}
                 try:
-                    doc, is_call, sub_attrs = self._send("_inspect", a, childpath="camera")
+                    doc, is_call, sub_attrs = self._send("_inspect", a, childpath="camera"+"_" + self.camera_sn)
                 except Exception as e:
                     self._es[a] = e
                     continue
 
                 if len(sub_attrs)>0:
-                    self.camera.__dict__[a] = Camera_Attribute_Callable(self._rem_func(a, childpath="camera"))
+                    self.camera.__dict__[a] = Camera_Attribute_Callable(self._rem_func(a, childpath="camera"+"_" + self.camera_sn))
                     ca = self.camera.__dict__[a]
                     ca.__doc__ = doc
                     for sub_attr in sub_attrs:
                         try:
-                            doc, is_call, sub_sub_attrs = self._send("_inspect", sub_attr, childpath=f"camera.{a}")
+                            doc, is_call, sub_sub_attrs = self._send("_inspect", sub_attr, childpath=f"camera_{self.camera_sn}.{a}")
                         except Exception as e:
                             self._es[f"{a}.{sub_attr}"] = e
                             continue
@@ -178,12 +186,12 @@ class ZmqPylonClient():
                             print(a, sub_attr, "has even more attributes")
                             print(attrs)
                         if is_call:
-                            setattr(ca, sub_attr, self._rem_func(sub_attr, childpath=f"camera.{a}"))
+                            setattr(ca, sub_attr, self._rem_func(sub_attr, childpath=f"camera_{self.camera_sn}.{a}"))
                             f = getattr(ca, sub_attr)
                             f.__doc__ = doc
                 else:
-                    setattr(self.camera, a, self._rem_func(a, childpath="camera"))
-                    doc = self._send("_get_doc", a, childpath="camera")
+                    setattr(self.camera, a, self._rem_func(a, childpath="camera"+"_" + self.camera_sn))
+                    doc = self._send("_get_doc", a, childpath="camera"+"_" + self.camera_sn)
                     f = getattr(self.camera, a)
                     f.__doc__ = doc
 
